@@ -28,6 +28,12 @@ mkdir natmap
 cd natmap
 git clone --recursive https://github.com/heiher/natmap.git jni
 ndk-build
+
+# windows (msys2)
+export MSYS=winsymlinks:native
+git clone --recursive https://github.com/heiher/natmap.git
+cd natmap
+make LFLAGS="-lmsys-2.0 -lws2_32"
 ```
 
 ## How to Use
@@ -82,6 +88,12 @@ public address.
 This program will then call the script specified by the argument to inform the
 public address after the port mapping is established. The script can update
 the DNS record for external access.
+
+In TCP mode on Windows, make sure your application server is bound to the local
+network IP, not to `0.0.0.0` and `::`.
+
+In UDP mode on Windows, make sure your application server is bound to `0.0.0.0`
+or `::`, not to the local network IP.
 
 Please note that you need to open the firewall to allow access to the bind port.
 

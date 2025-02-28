@@ -2,7 +2,7 @@
  ============================================================================
  Name        : hev-exec.c
  Author      : hev <r@hev.cc>
- Copyright   : Copyright (c) 2022 xyz
+ Copyright   : Copyright (c) 2022 - 2025 xyz
  Description : Exec
  ============================================================================
  */
@@ -15,15 +15,51 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
+#include <hev-task-call.h>
+
 #include "hev-conf.h"
 #include "hev-misc.h"
 
 #include "hev-exec.h"
 
+static HevTaskCall call;
+static const char *mode;
+static const char *path;
+static char oaddr[INET6_ADDRSTRLEN];
+static char iaddr[INET6_ADDRSTRLEN];
+static char oport[32];
+static char iport[32];
+static char ip4p[32];
+
 static void
 signal_handler (int signum)
 {
     waitpid (-1, NULL, WNOHANG);
+}
+
+static void
+hev_exec_fork_exec (HevTaskCall *call)
+{
+    pid_t pid;
+
+    pid = fork ();
+    if (pid < 0) {
+        LOG (E);
+        return;
+    } else if (pid != 0) {
+        return;
+    }
+
+    execl (path, path, oaddr, oport, ip4p, iport, mode, iaddr, NULL);
+
+    LOGV (E, "%s", "Run script failed, Please check is it executable?");
+    exit (-1);
+}
+
+void
+hev_exec_init (void *stack)
+{
+    call.stack_top = stack;
 }
 
 void
@@ -32,15 +68,7 @@ hev_exec_run (int family, unsigned int maddr[4], unsigned short mport,
 {
     unsigned char *q;
     unsigned char *p;
-    const char *mode;
-    const char *path;
     const char *fmt;
-    char oaddr[INET6_ADDRSTRLEN];
-    char oport[32];
-    char iaddr[INET6_ADDRSTRLEN];
-    char iport[32];
-    char ip4p[32];
-    pid_t pid;
 
     path = hev_conf_path ();
     signal (SIGCHLD, signal_handler);
@@ -79,16 +107,9 @@ hev_exec_run (int family, unsigned int maddr[4], unsigned short mport,
         return;
     }
 
-    pid = fork ();
-    if (pid < 0) {
-        LOG (E);
-        return;
-    } else if (pid != 0) {
-        return;
-    }
-
-    execl (path, path, oaddr, oport, ip4p, iport, mode, iaddr, NULL);
-
-    LOGV (E, "%s", "Run script failed, Please check is it executable?");
-    exit (-1);
+#ifdef __MSYS__
+    hev_task_call_jump (&call, hev_exec_fork_exec);
+#else
+    hev_exec_fork_exec (&call);
+#endif
 }

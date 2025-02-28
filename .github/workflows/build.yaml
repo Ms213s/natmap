@@ -3,7 +3,7 @@ name: "Build"
 on:
   push:
     branches:
-      - '**'
+      - master
   pull_request:
   release:
     types:
@@ -14,6 +14,8 @@ jobs:
   source:
     name: Source
     runs-on: ubuntu-22.04
+    env:
+      BRANCH_NAME: ${{ github.base_ref || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,15 +28,15 @@ jobs:
           if [ -z "${REV_ID}" ]; then
             REV_ID=$(git rev-parse --short HEAD)
           fi
-          mkdir -p natmap-${{ github.ref_name }}
-          git ls-files --recurse-submodules | tar c -O -T- | tar x -C natmap-${{ github.ref_name }}
-          echo ${REV_ID} > natmap-${{ github.ref_name }}/.version
-          tar cJf natmap-${{ github.ref_name }}.tar.xz natmap-${{ github.ref_name }}
+          mkdir -p natmap-${{ env.BRANCH_NAME }}
+          git ls-files --recurse-submodules | tar c -O -T- | tar x -C natmap-${{ env.BRANCH_NAME }}
+          echo ${REV_ID} > natmap-${{ env.BRANCH_NAME }}/.version
+          tar cJf natmap-${{ env.BRANCH_NAME }}.tar.xz natmap-${{ env.BRANCH_NAME }}
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
-          name: natmap-${{ github.ref_name }}.tar.xz
-          path: natmap-${{ github.ref_name }}.tar.xz
+          name: natmap-${{ env.BRANCH_NAME }}.tar.xz
+          path: natmap-${{ env.BRANCH_NAME }}.tar.xz
           if-no-files-found: error
           retention-days: 1
 
@@ -117,12 +119,112 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: true
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          location: D:\msys2
+          update: true
+          install: >-
+            gcc
+            git
+            make
+            wget
+            zip
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          export MSYS=winsymlinks:native
+          git clone --depth=1 --recursive file://`pwd` work; cd work
+          make LFLAGS="-lmsys-2.0 -lws2_32" -j`nproc`
+          mkdir natmap
+          cp bin/natmap* natmap
+          wget -P natmap https://github.com/heiher/msys2/releases/latest/download/msys-2.0.dll
+          zip -r ../natmap-win64.zip natmap
+      - name: Upload ${{ matrix.name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: natmap-win64.zip
+          path: natmap-win64.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: macOS
+    runs-on: macos-14
+    strategy:
+      matrix:
+        include:
+          - name: arm64
+            flags: -arch arm64 -mmacosx-version-min=11.0
+          - name: x86_64
+            flags: -arch x86_64 -mmacosx-version-min=10.6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: true
+      - name: Build ${{ matrix.name }}
+        run: |
+          make CC=clang CFLAGS="${{ matrix.flags }}" LFLAGS="${{ matrix.flags }}" -j $(sysctl -n hw.logicalcpu)
+          cp bin/natmap natmap-darwin-${{ matrix.name }}
+      - name: Upload ${{ matrix.name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: natmap-darwin-${{ matrix.name }}
+          path: natmap-darwin-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 1
+
+  freebsd:
+    name: FreeBSD
+    runs-on: ubuntu-22.04
+    if: github.event_name != 'release'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: true
+      - name: Build
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y gmake gcc
+          run: |
+            gmake
+            cp bin/natmap natmap-freebsd-x86_64
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: natmap-freebsd-x86_64
+          path: natmap-freebsd-x86_64
+          if-no-files-found: error
+          retention-days: 1
+
   release:
     name: Release
     runs-on: ubuntu-22.04
     needs:
       - source
       - linux
+      - windows
+      - macos
+      - freebsd
     if: github.event_name == 'release'
     steps:
       - name: Checkout
@@ -142,20 +244,6 @@ jobs:
           for i in release/natmap-*; do
             gh release upload ${{ github.event.release.tag_name }} $i
           done
-
-  macos:
-    name: macOS
-    runs-on: macos-14
-    if: github.event_name != 'release'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: true
-      - name: Build
-        run: |
-          make
 
   android:
     name: Android

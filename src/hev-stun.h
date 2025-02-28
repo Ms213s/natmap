@@ -2,7 +2,7 @@
  ============================================================================
  Name        : hev-stun.h
  Author      : hev <r@hev.cc>
- Copyright   : Copyright (c) 2022 xyz
+ Copyright   : Copyright (c) 2022 - 2025 xyz
  Description : Stun
  ============================================================================
  */
@@ -14,11 +14,11 @@ typedef void (*HevStunHandler) (void);
 
 /**
  * hev_stun_run:
- * @fd: socket file descriptor
+ * @saddr: socket source address
  * @handler: callback for stun done
  *
  * Run STUN client to get mapped address.
  */
-void hev_stun_run (int fd, HevStunHandler handler);
+void hev_stun_run (struct sockaddr *saddr, HevStunHandler handler);
 
 #endif /* __HEV_STUN_H__ */

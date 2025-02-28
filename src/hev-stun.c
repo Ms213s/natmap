@@ -2,7 +2,7 @@
  ============================================================================
  Name        : hev-stun.c
  Author      : hev <r@hev.cc>
- Copyright   : Copyright (c) 2022 xyz
+ Copyright   : Copyright (c) 2022 - 2025 xyz
  Description : Stun
  ============================================================================
  */
@@ -71,6 +71,10 @@ struct _StunMappedAddr
 
 static HevTask *task;
 static HevStunHandler handler;
+static int udp_timeout;
+static int udp_retry1;
+static int udp_retry2;
+static int *udp_retry = &udp_retry1;
 
 static int
 cmp_addr (int family, unsigned int maddr[4], unsigned short mport,
@@ -146,25 +150,25 @@ stun_tcp (int fd, StunMessage *msg, void *buf, size_t size)
 static ssize_t
 stun_udp (int fd, StunMessage *msg, void *buf, size_t size)
 {
-    ssize_t len;
+    ssize_t len = -1;
     int i;
 
-    for (i = 0; i < 10; i++) {
-        int timeout = 3000;
-
+    for (i = 0; i < *udp_retry; i++) {
         len = hev_task_io_socket_send (fd, msg, sizeof (StunMessage), 0,
-                                       io_yielder, &timeout);
+                                       io_yielder, &udp_timeout);
         if (len <= 0) {
             LOGV (E, "%s", "STUN UDP send failed.");
             return -1;
         }
 
-        len = hev_task_io_socket_recv (fd, buf, size, 0, io_yielder, &timeout);
+        len = hev_task_io_socket_recv (fd, buf, size, 0, io_yielder,
+                                       &udp_timeout);
         if (len > 0) {
             break;
         }
     }
 
+    udp_retry = &udp_retry2;
     return len;
 }
 
@@ -286,52 +290,59 @@ task_entry (void *data)
     const char *sport;
     unsigned int mark;
     int bport;
+    int loop;
     int mode;
-    int tfd;
-    int res;
     int fd;
 
-    tfd = (intptr_t)data;
     mode = hev_conf_mode ();
     stun = hev_conf_stun ();
     sport = hev_conf_sport ();
     iface = hev_conf_iface ();
     mark = hev_conf_mark ();
 
-    fd = hev_sock_client_stun (tfd, mode, stun, sport, iface, mark, baddr,
+#ifdef __MSYS__
+    udp_timeout = 100;
+    udp_retry1 = 50;
+    udp_retry2 = 5;
+    loop = 0;
+#else
+    udp_timeout = 3000;
+    udp_retry1 = 10;
+    udp_retry2 = 10;
+    loop = (mode == SOCK_DGRAM);
+#endif
+
+    fd = hev_sock_client_stun (data, mode, stun, sport, iface, mark, baddr,
                                &bport);
-    close (tfd);
     if (fd < 0) {
         LOGV (E, "%s", "Start STUN service failed.");
         hev_xnsk_kill ();
-        task = NULL;
-        return;
+        goto exit;
     }
 
-    if (mode == SOCK_STREAM) {
-        res = stun_bind (fd, mode, baddr, bport);
+    for (;;) {
+        int res = stun_bind (fd, mode, baddr, bport);
         if (res < 0) {
             LOG (E);
             hev_xnsk_kill ();
+            break;
         }
-    } else {
-        for (;;) {
-            res = stun_bind (fd, mode, baddr, bport);
-            if (res < 0) {
-                LOG (E);
-                hev_xnsk_kill ();
-                break;
-            }
-            hev_task_yield (HEV_TASK_WAITIO);
+
+        if (!loop) {
+            break;
         }
+
+        hev_task_yield (HEV_TASK_WAITIO);
     }
 
+    hev_task_del_fd (hev_task_self (), fd);
     close (fd);
+exit:
     task = NULL;
 }
 
 void
-hev_stun_run (int fd, HevStunHandler _handler)
+hev_stun_run (struct sockaddr *saddr, HevStunHandler _handler)
 {
     if (task) {
         hev_task_wakeup (task);
@@ -340,6 +351,5 @@ hev_stun_run (int fd, HevStunHandler _handler)
 
     handler = _handler;
     task = hev_task_new (-1);
-    fd = hev_task_io_dup (fd);
-    hev_task_run (task, task_entry, (void *)(intptr_t)fd);
+    hev_task_run (task, task_entry, saddr);
 }
